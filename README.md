@@ -1,22 +1,21 @@
 -- ==========================================================
--- [SH Script] - Remote Hook & Copy System v2.0
+-- [SH Script] - Remote Hook & Copy System v3.1 (Full / Fixed)
 -- ==========================================================
-local Players = game:GetService("Players")
-local CoreGui = game:GetService("CoreGui")
-local StarterGui = game:GetService("StarterGui")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local RunService = game:GetService("RunService")
+local Players            = game:GetService("Players")
+local StarterGui         = game:GetService("StarterGui")
+local ReplicatedStorage  = game:GetService("ReplicatedStorage")
+local Workspace          = game:GetService("Workspace")
 
 local LocalPlayer = Players.LocalPlayer
+local PlayerGui   = LocalPlayer:WaitForChild("PlayerGui")
 
 -- ==========================================================
 -- [CONFIG]
 -- ==========================================================
 local CONFIG = {
-    FirstRunFile   = "SH_FirstRun.txt",
+    FirstRunFile    = "SH_FirstRun.txt",
     RemoteCacheFile = "SH_RemoteCache.txt",
-    NotifyTitle    = "SH Script",
-    CommandDelay   = 0.03, -- تأخير بسيط جداً بين الأوامر (0 = أقصى سرعة، قد يسبب kick)
+    CommandDelay    = 0.05,
 }
 
 local COPY_COMMANDS = {
@@ -25,166 +24,153 @@ local COPY_COMMANDS = {
 }
 
 -- ==========================================================
--- [STORAGE HELPERS]
+-- [SAFE STORAGE]
 -- ==========================================================
-local hasFS = (typeof(writefile) == "function") and (typeof(readfile) == "function") and (typeof(isfile) == "function")
-
-local function fileExists(name) return hasFS and isfile(name) end
-local function fileRead(name)
+local hasFS = (type(writefile) == "function") and (type(readfile) == "function") and (type(isfile) == "function")
+local function fileExists(n) return hasFS and isfile(n) end
+local function fileRead(n)
     if not hasFS then return nil end
-    local ok, data = pcall(readfile, name)
-    return ok and data or nil
+    local ok, d = pcall(readfile, n); return ok and d or nil
 end
-local function fileWrite(name, data)
+local function fileWrite(n, d)
     if not hasFS then return false end
-    local ok = pcall(writefile, name, data)
-    return ok
+    local ok = pcall(writefile, n, d); return ok
 end
 
 -- ==========================================================
 -- [STATE]
 -- ==========================================================
 local State = {
-    isUnlocked       = false,
-    firstRunDone     = fileExists(CONFIG.FirstRunFile),
-    chatRemote       = nil,
-    adminRemote      = nil,
-    selectedPlayer   = nil,
-    copyRunning      = false,
-    copyThread       = nil,
-    mainGui          = nil,
+    isUnlocked     = false,
+    firstRunDone   = fileExists(CONFIG.FirstRunFile),
+    chatRemote     = nil,
+    adminRemote    = nil,
+    selectedPlayer = nil,
+    copyRunning    = false,
+    copyThread     = nil,
+    mainGui        = nil,
+    refreshRemoteStatus = nil,
+    refreshToggle       = nil,
 }
 
--- استرجاع الريموت المحفوظ سابقاً
-local function loadCachedRemote()
+-- ==========================================================
+-- [FIND BY PATH]
+-- ==========================================================
+local function findByPath(path)
+    if not path then return nil end
+    local obj = game
+    for seg in path:gmatch("[^%.]+") do
+        obj = obj and obj:FindFirstChild(seg)
+        if not obj then return nil end
+    end
+    return obj
+end
+
+local function loadCachedRemotes()
     local data = fileRead(CONFIG.RemoteCacheFile)
     if not data then return end
     for line in data:gmatch("[^\r\n]+") do
         local kind, path = line:match("^(%w+)|(.+)$")
-        if kind == "chat" then
-            local obj = game:FindFirstChild(path, true)
-            if not obj then
-                local segs = {}
-                for s in path:gmatch("[^%.]+") do table.insert(segs, s) end
-                obj = game
-                for _, seg in ipairs(segs) do
-                    obj = obj and obj:FindFirstChild(seg)
-                end
+        if kind and path then
+            local obj = findByPath(path)
+            if obj then
+                if kind == "chat"  then State.chatRemote  = obj end
+                if kind == "admin" then State.adminRemote = obj end
             end
-            if obj then State.chatRemote = obj end
-        elseif kind == "admin" then
-            local obj = game:FindFirstChild(path, true)
-            if not obj then
-                local segs = {}
-                for s in path:gmatch("[^%.]+") do table.insert(segs, s) end
-                obj = game
-                for _, seg in ipairs(segs) do
-                    obj = obj and obj:FindFirstChild(seg)
-                end
-            end
-            if obj then State.adminRemote = obj end
         end
     end
 end
+loadCachedRemotes()
 
 local function saveCachedRemotes()
-    if not hasFS then return end
     local lines = {}
-    if State.chatRemote then table.insert(lines, "chat|" .. State.chatRemote:GetFullName()) end
+    if State.chatRemote  then table.insert(lines, "chat|"  .. State.chatRemote:GetFullName()) end
     if State.adminRemote then table.insert(lines, "admin|" .. State.adminRemote:GetFullName()) end
     fileWrite(CONFIG.RemoteCacheFile, table.concat(lines, "\n"))
 end
 
-loadCachedRemote()
-
 -- ==========================================================
--- [NOTIFICATION]
+-- [NOTIFY]
 -- ==========================================================
 local function notify(title, text)
     pcall(function()
         StarterGui:SetCore("SendNotification", {
-            Title = title or CONFIG.NotifyTitle,
-            Text = text or "",
-            Duration = 3,
+            Title = title or "SH Script",
+            Text  = text or "",
+            Duration = 4,
         })
     end)
+    print(string.format("[SH][%s] %s", tostring(title), tostring(text)))
 end
 
 -- ==========================================================
 -- [REMOTE AUTO-DETECT]
 -- ==========================================================
+local function containsAny(str, list)
+    local low = str:lower()
+    for _, k in ipairs(list) do
+        if low:find(k, 1, true) then return true end
+    end
+    return false
+end
+
+local CHAT_KW  = { "chat","say","message","msg","sendmessage","sendchat","chatmsg","sendmsg","talk" }
+local ADMIN_KW = { "admin","command","cmd","execute","adonis","admincmd","cmdbar" }
+
 local function autoFindRemotes()
     local foundChat, foundAdmin = nil, nil
-    local chatKeywords = { "chat", "say", "message", "msg", "sendmessage", "sendchat", "chatmsg" }
-    local adminKeywords = { "admin", "command", "cmd", "execute", "adon", "adoniscmd", "admincmd" }
-
-    local function containsAny(str, list)
-        local low = str:lower()
-        for _, k in ipairs(list) do
-            if low:find(k, 1, true) then return true end
-        end
-        return false
-    end
 
     local function scan(container)
-        for _, obj in ipairs(container:GetDescendants()) do
+        if not container then return end
+        local ok, descs = pcall(function() return container:GetDescendants() end)
+        if not ok or not descs then return end
+        for _, obj in ipairs(descs) do
             if obj:IsA("RemoteEvent") or obj:IsA("RemoteFunction") then
                 local name = obj.Name
-                if not foundChat and containsAny(name, chatKeywords) then
-                    -- تجنب ريموتات الأدمن كشات
-                    if not containsAny(name, adminKeywords) then
-                        foundChat = obj
-                    end
-                end
-                if not foundAdmin and containsAny(name, adminKeywords) then
+                if not foundAdmin and containsAny(name, ADMIN_KW) then
                     foundAdmin = obj
+                elseif not foundChat and containsAny(name, CHAT_KW) and not containsAny(name, ADMIN_KW) then
+                    foundChat = obj
                 end
             end
         end
     end
 
     scan(ReplicatedStorage)
-    scan(game:GetService("Workspace"))
+    scan(Workspace)
     pcall(scan, game:GetService("ServerScriptService"))
+    pcall(scan, game:GetService("ReplicatedFirst"))
     pcall(scan, Players)
 
-    if foundChat then State.chatRemote = foundChat end
+    if foundChat  then State.chatRemote  = foundChat  end
     if foundAdmin then State.adminRemote = foundAdmin end
     if foundChat or foundAdmin then saveCachedRemotes() end
     return foundChat, foundAdmin
 end
 
 -- ==========================================================
--- [COMMAND SENDER]
+-- [FIRE]
 -- ==========================================================
-local function fireRemote(remote, ...)
-    if not remote then return false end
-    local ok = pcall(function()
-        if remote:IsA("RemoteEvent") then
-            remote:FireServer(...)
-        else
-            remote:InvokeServer(...)
-        end
-    end)
-    return ok
-end
-
 local function sendCommandWithName(cmd, targetName)
-    -- نحاول إرسال الأوامر بعدة صيغ شائعة
-    local targets = { State.chatRemote, State.adminRemote }
-    for _, r in ipairs(targets) do
-        if r then
-            pcall(function()
-                if r:IsA("RemoteEvent") then
-                    r:FireServer(cmd .. " " .. targetName)
-                    r:FireServer(cmd, targetName)
-                    r:FireServer(targetName, cmd)
-                else
-                    r:InvokeServer(cmd .. " " .. targetName)
-                    r:InvokeServer(cmd, targetName)
-                end
-            end)
-        end
+    if State.chatRemote then
+        pcall(function()
+            if State.chatRemote:IsA("RemoteEvent") then
+                State.chatRemote:FireServer(cmd .. " " .. targetName)
+                State.chatRemote:FireServer(cmd, targetName)
+            else
+                State.chatRemote:InvokeServer(cmd .. " " .. targetName)
+            end
+        end)
+    end
+    if State.adminRemote then
+        pcall(function()
+            if State.adminRemote:IsA("RemoteEvent") then
+                State.adminRemote:FireServer(cmd .. " " .. targetName)
+                State.adminRemote:FireServer(cmd, targetName)
+            else
+                State.adminRemote:InvokeServer(cmd .. " " .. targetName)
+            end
+        end)
     end
 end
 
@@ -200,14 +186,12 @@ local function stopCopy()
 end
 
 local function startCopy(targetName)
-    if State.copyRunning then stopCopy() end
+    stopCopy()
     if not targetName or targetName == "" then
-        notify("SH Script", "⚠️ اختر لاعباً أولاً")
-        return
+        notify("SH Script", "⚠️ اختر لاعباً أولاً"); return
     end
     if not State.chatRemote and not State.adminRemote then
-        notify("SH Script", "⚠️ لا يوجد ريموت، اضغط زر البحث")
-        return
+        notify("SH Script", "⚠️ لا يوجد ريموت، اضغط بحث"); return
     end
     State.copyRunning = true
     notify("SH Script", "▶️ بدء النسخ على: " .. targetName)
@@ -223,94 +207,119 @@ local function startCopy(targetName)
 end
 
 -- ==========================================================
--- [HOOK: التقاط ريموت الشات عند كتابة "شهد" أو "shahd"]
+-- [HOOK — التقاط ريموت الشات عند كتابة "شهد"]
 -- ==========================================================
-local oldNameCall
-oldNameCall = hookmetamethod(game, "__namecall", function(self, ...)
-    local method = getnamecallmethod()
-    local args = { ... }
-    if (not State.isUnlocked) and (method == "FireServer" or method == "InvokeServer") then
-        for _, arg in ipairs(args) do
-            if typeof(arg) == "string" then
-                local low = arg:lower()
-                if low:find("شهد") or low:find("shahd") then
-                    if (self:IsA("RemoteEvent") or self:IsA("RemoteFunction")) then
-                        State.chatRemote = self
-                        saveCachedRemotes()
-                        print("🚀 [SH] تم سحب ريموت الشات: " .. self:GetFullName())
-                        State.isUnlocked = true
-                        if State.onUnlock then State.onUnlock() end
+local function tryHookNameCall()
+    if type(getrawmetatable) ~= "function" then return false, "getrawmetatable غير متوفر" end
+    local gm = getrawmetatable(game)
+    if not gm then return false, "لا يوجد metatable" end
+
+    if type(setreadonly) == "function" then
+        pcall(setreadonly, gm, false)
+    end
+
+    local oldNameCall = gm.__namecall
+    if not oldNameCall then
+        if type(setreadonly) == "function" then pcall(setreadonly, gm, true) end
+        return false, "لا يوجد __namecall"
+    end
+
+    local hookFn = nil
+    if type(hookfunction) == "function" then hookFn = hookfunction
+    elseif type(replaceclosure) == "function" then hookFn = replaceclosure end
+    if not hookFn then
+        if type(setreadonly) == "function" then pcall(setreadonly, gm, true) end
+        return false, "لا يوجد hookfunction/replaceclosure"
+    end
+
+    hookFn(oldNameCall, function(self, ...)
+        local okm, method = pcall(getnamecallmethod)
+        if okm and (method == "FireServer" or method == "InvokeServer") and not State.isUnlocked then
+            local args = { ... }
+            for _, a in ipairs(args) do
+                if typeof(a) == "string" then
+                    local low = a:lower()
+                    if low:find("شهد") or low:find("shahd") then
+                        local okIs, isRemote = pcall(function()
+                            return self:IsA("RemoteEvent") or self:IsA("RemoteFunction")
+                        end)
+                        if okIs and isRemote then
+                            State.chatRemote = self
+                            saveCachedRemotes()
+                            State.isUnlocked = true
+                            print("🚀 [SH] سُحب ريموت الشات: " .. self:GetFullName())
+                            if State.onUnlock then State.onUnlock() end
+                        end
+                        break
                     end
-                    break
                 end
             end
         end
-    end
-    return oldNameCall(self, ...)
-end)
+        return oldNameCall(self, ...)
+    end)
+
+    if type(setreadonly) == "function" then pcall(setreadonly, gm, true) end
+    return true
+end
 
 -- ==========================================================
 -- [UI HELPERS]
 -- ==========================================================
-local function new(className, props, children)
-    local obj = Instance.new(className)
-    for k, v in pairs(props or {}) do obj[k] = v end
-    for _, c in ipairs(children or {}) do c.Parent = obj end
-    return obj
+local function new(c, p, kids)
+    local o = Instance.new(c)
+    for k, v in pairs(p or {}) do o[k] = v end
+    for _, k in ipairs(kids or {}) do k.Parent = o end
+    return o
 end
-
-local function corner(parent, r)
-    return new("UICorner", { CornerRadius = UDim.new(0, r or 8), Parent = parent })
+local function corner(p, r)
+    return new("UICorner", { CornerRadius = UDim.new(0, r or 8), Parent = p })
 end
-
-local function stroke(parent, color, thickness)
-    return new("UIStroke", {
-        Color = color or Color3.fromRGB(255,170,0),
-        Thickness = thickness or 1,
-        ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
-        Parent = parent,
-    })
+local function stroke(p, c, t)
+    return new("UIStroke", { Color = c or Color3.fromRGB(255,170,0), Thickness = t or 1, Parent = p })
 end
 
 local THEME = {
-    bg        = Color3.fromRGB(15, 15, 18),
-    panel     = Color3.fromRGB(24, 24, 28),
-    panel2    = Color3.fromRGB(32, 32, 38),
-    accent    = Color3.fromRGB(255, 170, 0),
-    green     = Color3.fromRGB(0, 220, 130),
-    red       = Color3.fromRGB(240, 70, 70),
-    text      = Color3.fromRGB(235, 235, 235),
-    subtext   = Color3.fromRGB(160, 160, 170),
+    bg     = Color3.fromRGB(15,15,18),
+    panel  = Color3.fromRGB(24,24,28),
+    panel2 = Color3.fromRGB(34,34,40),
+    accent = Color3.fromRGB(255,170,0),
+    green  = Color3.fromRGB(0,200,120),
+    red    = Color3.fromRGB(235,70,70),
+    text   = Color3.fromRGB(235,235,235),
+    sub    = Color3.fromRGB(160,160,170),
 }
 
 -- ==========================================================
--- [WELCOME SCREEN - تظهر أول مرة فقط]
+-- [WELCOME]
 -- ==========================================================
-local function showWelcome(onDone)
+local welcomeGui, welcomeStatus
+
+local function showWelcome()
     local gui = new("ScreenGui", {
         Name = "SH_WelcomeGui",
         ResetOnSpawn = false,
-        Parent = CoreGui,
+        IgnoreGuiInset = true,
+        ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+        Parent = PlayerGui,
     })
-    local frame = new("Frame", {
+    local f = new("Frame", {
         Size = UDim2.new(0, 400, 0, 200),
         Position = UDim2.new(0.5, -200, 0.5, -100),
         BackgroundColor3 = THEME.bg,
         BorderSizePixel = 0,
         Parent = gui,
     })
-    corner(frame, 12); stroke(frame, THEME.accent, 1)
+    corner(f, 12); stroke(f, THEME.accent, 1.5)
 
     new("TextLabel", {
         Size = UDim2.new(1, 0, 0, 45),
         BackgroundTransparency = 1,
         Text = "⚡ SH SCRIPT - REMOTE HOOK ⚡",
         TextColor3 = THEME.accent,
-        TextSize = 19,
+        TextSize = 18,
         Font = Enum.Font.FredokaOne,
-        Parent = frame,
+        Parent = f,
     })
-
     new("TextLabel", {
         Size = UDim2.new(1, -40, 0, 110),
         Position = UDim2.new(0, 20, 0, 45),
@@ -320,22 +329,21 @@ local function showWelcome(onDone)
         TextSize = 13,
         Font = Enum.Font.GothamMedium,
         TextWrapped = true,
-        Parent = frame,
+        Parent = f,
     })
-
-    local status = new("TextLabel", {
+    welcomeStatus = new("TextLabel", {
         Size = UDim2.new(1, -40, 0, 20),
         Position = UDim2.new(0, 20, 1, -30),
         BackgroundTransparency = 1,
         Text = "⏳ بانتظار الكلمة...",
-        TextColor3 = THEME.subtext,
+        TextColor3 = THEME.sub,
         TextSize = 12,
         Font = Enum.Font.Gotham,
         TextXAlignment = Enum.TextXAlignment.Left,
-        Parent = frame,
+        Parent = f,
     })
-
-    return gui, status
+    welcomeGui = gui
+    return gui
 end
 
 -- ==========================================================
@@ -345,13 +353,15 @@ local function buildMainUI()
     local gui = new("ScreenGui", {
         Name = "SH_MainGui",
         ResetOnSpawn = false,
-        Parent = CoreGui,
+        IgnoreGuiInset = true,
+        ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+        Parent = PlayerGui,
     })
     State.mainGui = gui
 
     local main = new("Frame", {
-        Size = UDim2.new(0, 460, 0, 340),
-        Position = UDim2.new(0.5, -230, 0.5, -170),
+        Size = UDim2.new(0, 460, 0, 360),
+        Position = UDim2.new(0.5, -230, 0.5, -180),
         BackgroundColor3 = THEME.bg,
         BorderSizePixel = 0,
         Active = true,
@@ -360,7 +370,6 @@ local function buildMainUI()
     })
     corner(main, 14); stroke(main, THEME.accent, 1.5)
 
-    -- الهيدر
     local header = new("Frame", {
         Size = UDim2.new(1, 0, 0, 42),
         BackgroundColor3 = THEME.panel,
@@ -368,6 +377,7 @@ local function buildMainUI()
         Parent = main,
     })
     corner(header, 14)
+
     new("TextLabel", {
         Size = UDim2.new(1, -60, 1, 0),
         Position = UDim2.new(0, 15, 0, 0),
@@ -393,7 +403,6 @@ local function buildMainUI()
     corner(closeBtn, 8)
     closeBtn.MouseButton1Click:Connect(function() gui.Enabled = false end)
 
-    -- شريط التبويبات
     local tabBar = new("Frame", {
         Size = UDim2.new(1, -20, 0, 36),
         Position = UDim2.new(0, 10, 0, 50),
@@ -403,9 +412,9 @@ local function buildMainUI()
     })
     corner(tabBar, 8)
 
-    local function makeTab(text, xPos, xSize)
+    local function makeTab(text, xPos)
         local b = new("TextButton", {
-            Size = UDim2.new(xSize, -4, 1, -6),
+            Size = UDim2.new(0.5, -4, 1, -6),
             Position = UDim2.new(xPos, 2, 0, 3),
             BackgroundColor3 = THEME.panel2,
             Text = text,
@@ -418,11 +427,9 @@ local function buildMainUI()
         corner(b, 6)
         return b
     end
+    local tabRemotes = makeTab("📡 Remotes", 0)
+    local tabCopy    = makeTab("📋 Copy",    0.5)
 
-    local tabRemotes = makeTab("📡 Remotes", 0, 0.5)
-    local tabCopy    = makeTab("📋 Copy",    0.5, 0.5)
-
-    -- الحاويات
     local remotesPage = new("Frame", {
         Size = UDim2.new(1, -20, 1, -100),
         Position = UDim2.new(0, 10, 0, 92),
@@ -436,115 +443,90 @@ local function buildMainUI()
         Visible = false,
         Parent = main,
     })
-
-    local function setActiveTab(which)
-        remotesPage.Visible = (which == "remotes")
-        copyPage.Visible    = (which == "copy")
-        tabRemotes.BackgroundColor3 = (which == "remotes") and THEME.accent or THEME.panel2
-        tabRemotes.TextColor3       = (which == "remotes") and Color3.new(0,0,0) or THEME.text
-        tabCopy.BackgroundColor3    = (which == "copy")    and THEME.accent or THEME.panel2
-        tabCopy.TextColor3          = (which == "copy")    and Color3.new(0,0,0) or THEME.text
+    local function setTab(w)
+        remotesPage.Visible = (w == "r")
+        copyPage.Visible    = (w == "c")
+        tabRemotes.BackgroundColor3 = (w == "r") and THEME.accent or THEME.panel2
+        tabRemotes.TextColor3       = (w == "r") and Color3.new(0,0,0) or THEME.text
+        tabCopy.BackgroundColor3    = (w == "c") and THEME.accent or THEME.panel2
+        tabCopy.TextColor3          = (w == "c") and Color3.new(0,0,0) or THEME.text
     end
-    setActiveTab("remotes")
-    tabRemotes.MouseButton1Click:Connect(function() setActiveTab("remotes") end)
-    tabCopy.MouseButton1Click:Connect(function() setActiveTab("copy") end)
+    setTab("r")
+    tabRemotes.MouseButton1Click:Connect(function() setTab("r") end)
+    tabCopy.MouseButton1Click:Connect(function() setTab("c") end)
 
     ------------------------------------------------------------
-    -- [PAGE 1: REMOTES]
+    -- [REMOTES PAGE]
     ------------------------------------------------------------
     local chatStatus = new("TextLabel", {
         Size = UDim2.new(1, 0, 0, 22),
         Position = UDim2.new(0, 4, 0, 0),
         BackgroundTransparency = 1,
-        Text = "",
-        TextColor3 = THEME.subtext,
-        TextSize = 12,
-        Font = Enum.Font.Gotham,
-        TextXAlignment = Enum.TextXAlignment.Left,
+        Text = "", TextColor3 = THEME.sub, TextSize = 12,
+        Font = Enum.Font.Gotham, TextXAlignment = Enum.TextXAlignment.Left,
         Parent = remotesPage,
     })
-
     local adminStatus = new("TextLabel", {
         Size = UDim2.new(1, 0, 0, 22),
         Position = UDim2.new(0, 4, 0, 24),
         BackgroundTransparency = 1,
-        Text = "",
-        TextColor3 = THEME.subtext,
-        TextSize = 12,
-        Font = Enum.Font.Gotham,
-        TextXAlignment = Enum.TextXAlignment.Left,
+        Text = "", TextColor3 = THEME.sub, TextSize = 12,
+        Font = Enum.Font.Gotham, TextXAlignment = Enum.TextXAlignment.Left,
         Parent = remotesPage,
     })
-
     local function refreshRemoteStatus()
-        chatStatus.Text = State.chatRemote
-            and ("✅ Chat Remote: " .. State.chatRemote.Name)
-            or  "❌ Chat Remote: غير موجود"
+        chatStatus.Text = State.chatRemote and ("✅ Chat: " .. State.chatRemote.Name) or "❌ Chat: غير موجود"
         chatStatus.TextColor3 = State.chatRemote and THEME.green or THEME.red
-        adminStatus.Text = State.adminRemote
-            and ("✅ Admin Remote: " .. State.adminRemote.Name)
-            or  "❌ Admin Remote: غير موجود"
+        adminStatus.Text = State.adminRemote and ("✅ Admin: " .. State.adminRemote.Name) or "❌ Admin: غير موجود"
         adminStatus.TextColor3 = State.adminRemote and THEME.green or THEME.red
     end
     State.refreshRemoteStatus = refreshRemoteStatus
     refreshRemoteStatus()
 
-    local function makeButton(text, color, xPos, xSize, yPos, ySize, parent)
+    local function mkBtn(text, color, xPos, xSize, yPos, ySize, parent)
         local b = new("TextButton", {
             Size = UDim2.new(xSize, -6, 0, ySize),
             Position = UDim2.new(xPos, 3, 0, yPos),
             BackgroundColor3 = color,
-            Text = text,
-            TextColor3 = Color3.new(1,1,1),
-            TextSize = 14,
-            Font = Enum.Font.GothamBold,
+            Text = text, TextColor3 = Color3.new(1,1,1),
+            TextSize = 14, Font = Enum.Font.GothamBold,
             BorderSizePixel = 0,
             Parent = parent or remotesPage,
         })
-        corner(b, 8)
-        return b
+        corner(b, 8); return b
     end
 
-    local searchBtn = makeButton("🔍 بحث عن الريموت", THEME.accent, 0, 0.5, 60, 38, remotesPage)
+    local searchBtn = mkBtn("🔍 بحث عن الريموت", THEME.accent, 0, 0.5, 60, 38)
     searchBtn.TextColor3 = Color3.new(0,0,0)
     searchBtn.MouseButton1Click:Connect(function()
         local c, a = autoFindRemotes()
         refreshRemoteStatus()
-        if c or a then
-            notify("SH Script", "✅ تم إيجاد الريموتات وحفظها")
-        else
-            notify("SH Script", "⚠️ لم يتم إيجاد ريموتات")
-        end
+        if c or a then notify("SH Script", "✅ تم إيجاد الريموتات")
+        else notify("SH Script", "⚠️ لم يتم إيجاد ريموتات") end
     end)
 
-    local lockBtn = makeButton("🔒 قفل/فتح", THEME.panel2, 0.5, 0.5, 60, 38, remotesPage)
+    local lockBtn = mkBtn("🔓/🔒 الالتقاط", THEME.panel2, 0.5, 0.5, 60, 38)
     lockBtn.MouseButton1Click:Connect(function()
         State.isUnlocked = not State.isUnlocked
         notify("SH Script", State.isUnlocked and "🔓 الالتقاط مفتوح" or "🔒 الالتقاط مقفل")
     end)
 
-    -- زر تشغيل النسخ (يبقى مشتغل حتى لو خرج/دخل)
-    local toggleCopyBtn = makeButton("▶️ تشغيل", THEME.green, 0, 1, 110, 44, remotesPage)
+    local toggleBtn = mkBtn("▶️ تشغيل", THEME.green, 0, 1, 110, 44)
     local function refreshToggle()
         if State.copyRunning then
-            toggleCopyBtn.Text = "⏹️ إيقاف"
-            toggleCopyBtn.BackgroundColor3 = THEME.red
+            toggleBtn.Text = "⏹️ إيقاف"
+            toggleBtn.BackgroundColor3 = THEME.red
         else
-            toggleCopyBtn.Text = "▶️ تشغيل"
-            toggleCopyBtn.BackgroundColor3 = THEME.green
+            toggleBtn.Text = "▶️ تشغيل"
+            toggleBtn.BackgroundColor3 = THEME.green
         end
     end
     State.refreshToggle = refreshToggle
-    toggleCopyBtn.MouseButton1Click:Connect(function()
-        if State.copyRunning then
-            stopCopy()
+    toggleBtn.MouseButton1Click:Connect(function()
+        if State.copyRunning then stopCopy()
         else
-            if not State.selectedPlayer then
-                notify("SH Script", "⚠️ اختر لاعباً من تبويب Copy")
-                setActiveTab("copy")
-            else
-                startCopy(State.selectedPlayer)
-            end
+            if State.selectedPlayer then startCopy(State.selectedPlayer)
+            else notify("SH Script", "⚠️ اختر لاعباً من تبويب Copy"); setTab("c") end
         end
         refreshToggle()
     end)
@@ -553,25 +535,22 @@ local function buildMainUI()
         Size = UDim2.new(1, 0, 0, 40),
         Position = UDim2.new(0, 4, 0, 165),
         BackgroundTransparency = 1,
-        Text = "ملاحظة: زر التشغيل يرسل الأوامر على آخر لاعب محدد.\nالإعدادات محفوظة حتى بعد الخروج أو تغيير الماب.",
-        TextColor3 = THEME.subtext,
-        TextSize = 11,
-        Font = Enum.Font.Gotham,
-        TextWrapped = true,
+        Text = "زر التشغيل يرسل الأوامر على آخر لاعب محدد.\nالإعدادات محفوظة بعد الخروج أو تغيير الماب.",
+        TextColor3 = THEME.sub, TextSize = 11,
+        Font = Enum.Font.Gotham, TextWrapped = true,
         TextXAlignment = Enum.TextXAlignment.Left,
         Parent = remotesPage,
     })
 
     ------------------------------------------------------------
-    -- [PAGE 2: COPY]
+    -- [COPY PAGE]
     ------------------------------------------------------------
     new("TextLabel", {
         Size = UDim2.new(1, 0, 0, 20),
         Position = UDim2.new(0, 4, 0, 0),
         BackgroundTransparency = 1,
-        Text = "اختر لاعباً من القائمة:",
-        TextColor3 = THEME.text,
-        TextSize = 13,
+        Text = "اختر لاعباً:",
+        TextColor3 = THEME.text, TextSize = 13,
         Font = Enum.Font.GothamBold,
         TextXAlignment = Enum.TextXAlignment.Left,
         Parent = copyPage,
@@ -588,32 +567,28 @@ local function buildMainUI()
         Parent = copyPage,
     })
     corner(scroll, 8)
-
-    local listLayout = new("UIListLayout", {
+    local layout = new("UIListLayout", {
         Padding = UDim.new(0, 4),
         SortOrder = Enum.SortOrder.LayoutOrder,
         Parent = scroll,
     })
     new("UIPadding", {
-        PaddingTop = UDim.new(0, 6),
-        PaddingLeft = UDim.new(0, 6),
-        PaddingRight = UDim.new(0, 6),
-        PaddingBottom = UDim.new(0, 6),
+        PaddingTop = UDim.new(0, 6), PaddingLeft = UDim.new(0, 6),
+        PaddingRight = UDim.new(0, 6), PaddingBottom = UDim.new(0, 6),
         Parent = scroll,
     })
 
-    local function refreshPlayerList()
+    local function refreshPlayers()
         for _, c in ipairs(scroll:GetChildren()) do
             if c:IsA("TextButton") then c:Destroy() end
         end
-        local players = Players:GetPlayers()
-        for _, plr in ipairs(players) do
+        for _, plr in ipairs(Players:GetPlayers()) do
             if plr ~= LocalPlayer then
                 local btn = new("TextButton", {
                     Size = UDim2.new(1, -6, 0, 30),
-                    BackgroundColor3 = THEME.panel2,
-                    Text = "👤 " .. plr.Name .. " (@" .. plr.DisplayName .. ")",
-                    TextColor3 = THEME.text,
+                    BackgroundColor3 = (State.selectedPlayer == plr.Name) and THEME.accent or THEME.panel2,
+                    Text = "👤 " .. plr.Name,
+                    TextColor3 = (State.selectedPlayer == plr.Name) and Color3.new(0,0,0) or THEME.text,
                     TextSize = 12,
                     Font = Enum.Font.GothamMedium,
                     BorderSizePixel = 0,
@@ -623,9 +598,10 @@ local function buildMainUI()
                 corner(btn, 6)
                 btn.MouseButton1Click:Connect(function()
                     State.selectedPlayer = plr.Name
-                    for _, other in ipairs(scroll:GetChildren()) do
-                        if other:IsA("TextButton") then
-                            other.BackgroundColor3 = THEME.panel2
+                    for _, o in ipairs(scroll:GetChildren()) do
+                        if o:IsA("TextButton") then
+                            o.BackgroundColor3 = THEME.panel2
+                            o.TextColor3 = THEME.text
                         end
                     end
                     btn.BackgroundColor3 = THEME.accent
@@ -634,41 +610,24 @@ local function buildMainUI()
                 end)
             end
         end
-        scroll.CanvasSize = UDim2.new(0, 0, 0, listLayout.AbsoluteContentSize.Y + 12)
+        scroll.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y + 12)
     end
+    refreshPlayers()
+    Players.PlayerAdded:Connect(function() task.wait(1); refreshPlayers() end)
+    Players.PlayerRemoving:Connect(function() task.wait(0.2); refreshPlayers() end)
 
-    Players.PlayerAdded:Connect(function() task.wait(1); refreshPlayerList() end)
-    Players.PlayerRemoving:Connect(function() task.wait(0.2); refreshPlayerList() end)
-    refreshPlayerList()
-
-    -- أزرار النسخ
-    local copyStartBtn = makeButton("▶️ بدء النسخ", THEME.green, 0, 0.5, 182, 40, copyPage)
-    copyStartBtn.MouseButton1Click:Connect(function()
+    local startBtn = mkBtn("▶️ بدء النسخ", THEME.green, 0, 0.5, 182, 40, copyPage)
+    startBtn.MouseButton1Click:Connect(function()
         if State.selectedPlayer then
             startCopy(State.selectedPlayer)
             if State.refreshToggle then State.refreshToggle() end
-        else
-            notify("SH Script", "⚠️ اختر لاعباً أولاً")
-        end
+        else notify("SH Script", "⚠️ اختر لاعباً") end
     end)
-
-    local copyStopBtn = makeButton("⏹️ إيقاف النسخ", THEME.red, 0.5, 0.5, 182, 40, copyPage)
-    copyStopBtn.MouseButton1Click:Connect(function()
+    local stopBtn = mkBtn("⏹️ إيقاف", THEME.red, 0.5, 0.5, 182, 40, copyPage)
+    stopBtn.MouseButton1Click:Connect(function()
         stopCopy()
         if State.refreshToggle then State.refreshToggle() end
     end)
-
-    new("TextLabel", {
-        Size = UDim2.new(1, 0, 0, 18),
-        Position = UDim2.new(0, 4, 0, 228),
-        BackgroundTransparency = 1,
-        Text = "⚡ الأوامر تُرسل بأقصى سرعة عبر Chat/Admin Remote",
-        TextColor3 = THEME.subtext,
-        TextSize = 11,
-        Font = Enum.Font.Gotham,
-        TextXAlignment = Enum.TextXAlignment.Left,
-        Parent = copyPage,
-    })
 
     return gui
 end
@@ -686,8 +645,6 @@ local function openMainUI()
     buildMainUI()
 end
 
-local welcomeGui, welcomeStatus
-
 local function onChatUnlocked()
     if welcomeGui then
         if welcomeStatus then
@@ -695,10 +652,9 @@ local function onChatUnlocked()
             welcomeStatus.TextColor3 = THEME.green
         end
         task.delay(0.8, function()
-            pcall(function() welcomeGui:Destroy() end)
+            pcall(function() if welcomeGui then welcomeGui:Destroy() end end)
             welcomeGui = nil
-            -- حفظ علامة أن الشاشة الأولى انتهت
-            if hasFS then fileWrite(CONFIG.FirstRunFile, "done") end
+            fileWrite(CONFIG.FirstRunFile, "done")
             State.firstRunDone = true
             openMainUI()
         end)
@@ -708,16 +664,35 @@ local function onChatUnlocked()
 end
 State.onUnlock = onChatUnlocked
 
--- منطق البداية
+-- محاولة الهوك
+local hookOk, hookErr = tryHookNameCall()
+if hookOk then print("✅ [SH] الـ __namecall hook مثبت")
+else print("⚠️ [SH] الهوك غير متاح: " .. tostring(hookErr) .. " — نعتمد على البحث التلقائي") end
+
+-- مسح مبكر
+if not State.chatRemote or not State.adminRemote then
+    autoFindRemotes()
+end
+
+-- مراقبة ريموتات جديدة
+pcall(function()
+    ReplicatedStorage.DescendantAdded:Connect(function(o)
+        if (o:IsA("RemoteEvent") or o:IsA("RemoteFunction")) and not State.adminRemote then
+            if containsAny(o.Name, ADMIN_KW) then
+                State.adminRemote = o
+                saveCachedRemotes()
+                if State.refreshRemoteStatus then State.refreshRemoteStatus() end
+            end
+        end
+    end)
+end)
+
+-- البداية
 if not State.firstRunDone then
-    welcomeGui, welcomeStatus = showWelcome()
+    showWelcome()
 else
-    -- سبق وشاف الشاشة → يفتح مباشرة، وإن لم يوجد ريموت يحاول البحث تلقائياً
-    if not State.chatRemote and not State.adminRemote then
-        autoFindRemotes()
-    end
     openMainUI()
     notify("SH Script", "👋 أهلاً بك مجدداً")
 end
 
-print("--- [SH Script v2.0]: النظام يعمل. اكتب (شهد) في الشات إن كانت الشاشة الأولى مفتوحة ---")
+print("--- [SH Script v3.1] جاهز. اكتب (شهد) في الشات إن ظهرت شاشة الترحيب ---")
