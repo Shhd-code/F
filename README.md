@@ -1050,54 +1050,22 @@ prefixBox.FocusLost:Connect(function()
  applyPrefix(val)
 end)
 
--- بحث ذكي عن ChatEvent في أي مسار شائع
-local function resolveChatEvent()
- if chatRemote and chatRemote.Parent then return chatRemote end
- local rs = game:GetService("ReplicatedStorage")
- local paths = {
-  {"Remotes", "ChatEvent"},
-  {"RemoteEvents", "ChatEvent"},
-  {"Remotes", "SayMessageRequest"},
-  {"RemoteEvents", "SayMessageRequest"},
-  {"DefaultChatSystemChatEvents", "SayMessageRequest"},
- }
- for _, p in ipairs(paths) do
-  local c = rs:FindFirstChild(p[1])
-  if c then
-   local ev = c:FindFirstChild(p[2])
-   if ev and (ev:IsA("RemoteEvent") or ev:IsA("RemoteFunction")) then
-    return ev
-   end
-  end
- end
- return nil
-end
-
 local function sendOnce(message)
  if not silentMode then
  pcall(function()
- local chatR = resolveChatEvent()
+ local chatR = chatRemote
+ if not chatR then
+ pcall(function() chatR = game:GetService("ReplicatedStorage").Remotes.ChatEvent end)
+ end
  if chatR then
-  chatR:FireServer(message)
- elseif capturedChatRemote then
-  capturedChatRemote:FireServer(message)
+ local args = {[1] = message}
+ chatR:FireServer(unpack(args))
  end
  end)
  end
  if hdRemote then
  task.spawn(function()
-  pcall(function() hdRemote:InvokeServer(message) end)
- end)
- end
- if capturedChatRemote then
- task.spawn(function()
-  pcall(function()
-   if capturedChatRemote:IsA("RemoteEvent") then
-    capturedChatRemote:FireServer(message)
-   else
-    capturedChatRemote:InvokeServer(message)
-   end
-  end)
+ pcall(function() hdRemote:InvokeServer(message) end)
  end)
  end
 end
@@ -1122,22 +1090,23 @@ end
 local function startSpam(message)
  if spamRunning then stopSpam(); task.wait(0.05) end
  spamRunning = true
- setStatus("السبام شغال... اضغط إيقاف للايقاف", true)
+ local targetName = getEffectiveName() or selectedName or "؟"
+ setStatus("⚡ السبام شغال على: " .. targetName, true)
  spamThread = task.spawn(function()
   while spamRunning do
-   -- 1) تأكيد بصري في الشات: "يتم نسخ [اسم اللاعب]"
-   if not silentMode then
+   -- 1) إرسال "يتم نسخ [اسم]" عبر الريموت المُلتقط (يظهر في الشات)
+   if capturedChatRemote then
     pcall(function()
-     local chatR = resolveChatEvent()
-     if chatR then
-      local targetName = getEffectiveName() or selectedName or "؟"
-      chatR:FireServer("يتم نسخ " .. targetName)
+     if capturedChatRemote:IsA("RemoteEvent") then
+      capturedChatRemote:FireServer("يتم نسخ " .. targetName)
+     else
+      capturedChatRemote:InvokeServer("يتم نسخ " .. targetName)
      end
     end)
    end
-   -- 2) الأمر الحقيقي عبر الريموت (يُنفذ في الخفاء)
+   -- 2) الأوامر كما هي (بدون تغيير)
    sendOnce(message)
-   task.wait(0.05)
+   task.wait(0.03)
   end
  end)
 end
