@@ -18,7 +18,6 @@ local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 
 local capturedChatRemote = nil
 
--- helper: choose best parent for executor GUIs (Delta/Synapse/etc)
 local function getGuiParent()
  local ok, hidden = pcall(function() return gethui() end)
  if ok and hidden then return hidden end
@@ -28,7 +27,6 @@ local function getGuiParent()
 end
 local guiParent = getGuiParent()
 
--- cleanup old
 pcall(function()
  for _, n in ipairs({"SHHub","SHMini","SHSplash"}) do
  local old = guiParent:FindFirstChild(n)
@@ -37,8 +35,6 @@ pcall(function()
  if old2 then old2:Destroy() end
  end
 end)
-
--- إشعار فريق SH Hub – يظهر بعد دقيقتين من تشغيل السكربت
 
 local function getAvatar(username)
  local ok1, uid = pcall(function()
@@ -194,7 +190,6 @@ task.delay(120, function()
  showTeamCard()
 end)
 
--- ─── نافذة "ما الجديد" تظهر بعد الإنترو ─────────────────────
 local function showWhatsNew()
  local core = game:GetService("CoreGui")
  local wsg = Instance.new("ScreenGui")
@@ -318,7 +313,6 @@ local function showWhatsNew()
  closeBtn.MouseButton1Click:Connect(closeWhatsNew)
 end
 
--- ─── الإنترو مع تخطي بالضغط مرتين ──────────────────────────
 local function runSplash()
  pcall(function()
  loadstring(game:HttpGet("https://raw.githubusercontent.com/Shhd-code/Antro_ray/refs/heads/main/README.md"))()
@@ -496,7 +490,7 @@ local pages, tabButtons = {}, {}
 
 local function makeTab(name)
  local btn = Instance.new("TextButton", tabBar)
- btn.Size = UDim2.new(0, 118, 1, 0); btn.BackgroundColor3 = Color3.fromRGB(8, 30, 14)
+ btn.Size = UDim2.new(0, 115, 1, 0); btn.BackgroundColor3 = Color3.fromRGB(8, 30, 14)
  btn.BackgroundTransparency = 0.4; btn.BorderSizePixel = 0; btn.AutoButtonColor = false
  btn.Font = Enum.Font.GothamBold; btn.Text = name; btn.TextSize = 14
  btn.TextColor3 = Color3.fromRGB(160, 230, 180)
@@ -566,6 +560,14 @@ selectedLabel.TextColor3 = Color3.fromRGB(180, 255, 200)
 selectedLabel.TextXAlignment = Enum.TextXAlignment.Left
 selectedLabel.Text = "اختر لاعب من القائمة"
 
+local function refreshSelectedLabel()
+ local nameTxt = selectedName and ("👤 " .. selectedName) or "اختر لاعب من القائمة"
+ local remoteTxt = capturedChatRemote and ("🔗 " .. capturedChatRemote.Name) or "🔗 غير محدد"
+ selectedLabel.Text = nameTxt .. "  |  " .. remoteTxt
+ selectedLabel.TextColor3 = capturedChatRemote and Color3.fromRGB(0,255,130) or Color3.fromRGB(180,255,200)
+end
+refreshSelectedLabel()
+
 local playerChips = {}
 local function refreshPlayers()
  for _, c in ipairs(playersBar:GetChildren()) do
@@ -584,7 +586,7 @@ local function refreshPlayers()
  local cs = Instance.new("UIStroke", chip); cs.Color = Color3.fromRGB(0, 200, 100); cs.Transparency = 0.5
  chip.MouseButton1Click:Connect(function()
  selectedName = p.Name
- selectedLabel.Text = "تم اختيار: " .. p.Name
+ refreshSelectedLabel()
  for _, ch in pairs(playerChips) do
  TweenService:Create(ch, TweenInfo.new(0.12), {BackgroundColor3 = Color3.fromRGB(10, 35, 18)}):Play()
  end
@@ -1065,6 +1067,13 @@ local function sendOnce(message)
  task.spawn(function()
  pcall(function() hdRemote:InvokeServer(message) end)
  end)
+ elseif capturedChatRemote and silentMode then
+ task.spawn(function()
+ pcall(function()
+ local args = {[1] = message}
+ capturedChatRemote:FireServer(unpack(args))
+ end)
+ end)
  end
 end
 
@@ -1478,7 +1487,6 @@ local remoteLibrary = {}
 local remoteActivePath = nil
 local remoteScroll, remoteLayout, remoteStatusLbl
 local remoteWelcomeGui = nil
-local remoteStatusText = Instance.new("TextLabel", remotePage)
 
 local function rFileRead(n)
  if not (readfile and isfile) then return nil end
@@ -1628,6 +1636,7 @@ local function rRebuild()
  if not r then setStatus("❌ الريموت غير موجود") return end
  rSetActive(r)
  rRebuild()
+ if refreshSelectedLabel then refreshSelectedLabel() end
  setStatus("⭐ فُعّل: " .. r.Name)
  end)
  
@@ -1647,6 +1656,7 @@ local function rRebuild()
  rRemove(item.path)
  if remoteActivePath == item.path then rClearActive() end
  rRebuild()
+ if refreshSelectedLabel then refreshSelectedLabel() end
  setStatus("🗑️ حُذف من المكتبة")
  end)
  end
@@ -1662,7 +1672,7 @@ end
 remoteStatusLbl = Instance.new("TextLabel", remotePage)
 remoteStatusLbl.BackgroundTransparency = 1
 remoteStatusLbl.Position = UDim2.new(0, 10, 0, 8)
-remoteStatusLbl.Size = UDim2.new(1, -20, 0, 30)
+remoteStatusLbl.Size = UDim2.new(1, -100, 0, 30)
 remoteStatusLbl.Font = Enum.Font.GothamSemibold
 remoteStatusLbl.TextSize = 12
 remoteStatusLbl.TextColor3 = Color3.fromRGB(150,220,170)
@@ -1670,6 +1680,38 @@ remoteStatusLbl.TextXAlignment = Enum.TextXAlignment.Left
 remoteStatusLbl.Text = "⭐ النشط: لا يوجد"
 remoteStatusLbl.TextWrapped = true
 remoteStatusLbl.TextTruncate = Enum.TextTruncate.AtEnd
+
+local testRemoteBtn = Instance.new("TextButton", remotePage)
+testRemoteBtn.Position = UDim2.new(1, -90, 0, 8)
+testRemoteBtn.Size = UDim2.new(0, 80, 0, 30)
+testRemoteBtn.BackgroundColor3 = Color3.fromRGB(0,120,80)
+testRemoteBtn.BackgroundTransparency = 0.1
+testRemoteBtn.BorderSizePixel = 0
+testRemoteBtn.AutoButtonColor = false
+testRemoteBtn.Font = Enum.Font.GothamBold
+testRemoteBtn.Text = "⚡ اختبار"
+testRemoteBtn.TextSize = 12
+testRemoteBtn.TextColor3 = Color3.new(1,1,1)
+Instance.new("UICorner", testRemoteBtn).CornerRadius = UDim.new(0, 7)
+local trs = Instance.new("UIStroke", testRemoteBtn)
+trs.Color = Color3.fromRGB(0,255,130); trs.Thickness = 1.5; trs.Transparency = 0.3
+testRemoteBtn.MouseEnter:Connect(function() TweenService:Create(testRemoteBtn, TweenInfo.new(0.12), {BackgroundTransparency=0}):Play() end)
+testRemoteBtn.MouseLeave:Connect(function() TweenService:Create(testRemoteBtn, TweenInfo.new(0.12), {BackgroundTransparency=0.1}):Play() end)
+testRemoteBtn.MouseButton1Click:Connect(function()
+ if not capturedChatRemote then
+ setStatus("❌ لا يوجد ريموت نشط — اختر واحداً أولاً")
+ return
+ end
+ local ok = pcall(function()
+ local args = {[1] = "hi"}
+ capturedChatRemote:FireServer(unpack(args))
+ end)
+ if ok then
+ setStatus("⚡ أُرسل اختبار عبر: " .. capturedChatRemote.Name)
+ else
+ setStatus("❌ فشل الاختبار — قد يحتاج args مختلفة")
+ end
+end)
 
 remoteScroll = Instance.new("ScrollingFrame", remotePage)
 remoteScroll.Position = UDim2.new(0, 10, 0, 42)
@@ -1814,6 +1856,7 @@ if hookmetamethod then
  rRebuild()
  closeRemoteWelcome()
  setStatus("✅ التُقط: " .. self.Name)
+ if refreshSelectedLabel then refreshSelectedLabel() end
  break
  end
  end
@@ -1829,14 +1872,139 @@ end
 rLoad()
 rRebuild()
 
--- Page: سبام اكسترا
-
+-- ═══════════════════════════════════════════════════════
+-- [قسم سبام اكسترا]
+-- ═══════════════════════════════════════════════════════
 local extraInfo = Instance.new("TextLabel", extraPage)
 extraInfo.BackgroundTransparency = 1
 extraInfo.Position = UDim2.new(0, 10, 0, 10); extraInfo.Size = UDim2.new(1, -20, 0, 24)
-extraInfo.Font = Enum.Font.GothamBold; extraInfo.Text = "سبام اكسترا"
-extraInfo.TextSize = 16; extraInfo.TextColor3 = Color3.fromRGB(0, 255, 130)
+extraInfo.Font = Enum.Font.GothamBold; extraInfo.Text = "⚡ سبام اكسترا — تكرار النص/الأمر"
+extraInfo.TextSize = 15; extraInfo.TextColor3 = Color3.fromRGB(0, 255, 130)
 extraInfo.TextXAlignment = Enum.TextXAlignment.Left
+
+local inputLabel = Instance.new("TextLabel", extraPage)
+inputLabel.BackgroundTransparency = 1
+inputLabel.Position = UDim2.new(0, 10, 0, 40); inputLabel.Size = UDim2.new(1, -20, 0, 18)
+inputLabel.Font = Enum.Font.GothamSemibold; inputLabel.Text = "اكتب الكلمة أو الأمر:"
+inputLabel.TextSize = 12; inputLabel.TextColor3 = Color3.fromRGB(180, 255, 200)
+inputLabel.TextXAlignment = Enum.TextXAlignment.Left
+
+local extraInputBox = Instance.new("TextBox", extraPage)
+extraInputBox.Position = UDim2.new(0, 10, 0, 62); extraInputBox.Size = UDim2.new(1, -20, 0, 48)
+extraInputBox.BackgroundColor3 = Color3.fromRGB(8, 25, 14); extraInputBox.BackgroundTransparency = 0.15
+extraInputBox.BorderSizePixel = 0
+extraInputBox.Font = Enum.Font.GothamSemibold; extraInputBox.TextSize = 14
+extraInputBox.TextColor3 = Color3.fromRGB(230, 255, 235)
+extraInputBox.PlaceholderText = "هلا   أو   ;fling username"
+extraInputBox.PlaceholderColor3 = Color3.fromRGB(100, 150, 120)
+extraInputBox.TextXAlignment = Enum.TextXAlignment.Left
+extraInputBox.Text = ""; extraInputBox.ClearTextOnFocus = false
+Instance.new("UICorner", extraInputBox).CornerRadius = UDim.new(0, 8)
+local eiStroke = Instance.new("UIStroke", extraInputBox)
+eiStroke.Color = Color3.fromRGB(0, 200, 100); eiStroke.Transparency = 0.4
+
+local repeatRow = Instance.new("Frame", extraPage)
+repeatRow.BackgroundTransparency = 1
+repeatRow.Position = UDim2.new(0, 10, 0, 118); repeatRow.Size = UDim2.new(1, -20, 0, 32)
+
+local repeatLabel = Instance.new("TextLabel", repeatRow)
+repeatLabel.BackgroundTransparency = 1
+repeatLabel.Position = UDim2.new(0, 0, 0, 0); repeatLabel.Size = UDim2.new(1, -100, 1, 0)
+repeatLabel.Font = Enum.Font.GothamSemibold; repeatLabel.Text = "عدد التكرار داخل الرسالة:"
+repeatLabel.TextSize = 12; repeatLabel.TextColor3 = Color3.fromRGB(180, 255, 200)
+repeatLabel.TextXAlignment = Enum.TextXAlignment.Left
+
+local repeatBox = Instance.new("TextBox", repeatRow)
+repeatBox.Position = UDim2.new(1, -90, 0, 0); repeatBox.Size = UDim2.new(0, 90, 1, 0)
+repeatBox.BackgroundColor3 = Color3.fromRGB(8, 25, 14); repeatBox.BackgroundTransparency = 0.15
+repeatBox.BorderSizePixel = 0
+repeatBox.Font = Enum.Font.GothamBold; repeatBox.TextSize = 15
+repeatBox.TextColor3 = Color3.fromRGB(0, 255, 130)
+repeatBox.Text = "20"; repeatBox.ClearTextOnFocus = false
+Instance.new("UICorner", repeatBox).CornerRadius = UDim.new(0, 8)
+local rbStroke = Instance.new("UIStroke", repeatBox)
+rbStroke.Color = Color3.fromRGB(0, 200, 100); rbStroke.Transparency = 0.4
+
+local extraBtnRow = Instance.new("Frame", extraPage)
+extraBtnRow.BackgroundTransparency = 1
+extraBtnRow.Position = UDim2.new(0, 10, 0, 158); extraBtnRow.Size = UDim2.new(1, -20, 0, 46)
+
+local extraStartBtn = Instance.new("TextButton", extraBtnRow)
+extraStartBtn.Position = UDim2.new(0, 0, 0, 0); extraStartBtn.Size = UDim2.new(0.5, -4, 1, 0)
+extraStartBtn.BackgroundColor3 = Color3.fromRGB(180, 25, 25)
+extraStartBtn.BackgroundTransparency = 0.05; extraStartBtn.BorderSizePixel = 0
+extraStartBtn.AutoButtonColor = false
+extraStartBtn.Font = Enum.Font.GothamBlack; extraStartBtn.Text = "▶ تشغيل سبام"
+extraStartBtn.TextSize = 15; extraStartBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+Instance.new("UICorner", extraStartBtn).CornerRadius = UDim.new(0, 10)
+local esStroke = Instance.new("UIStroke", extraStartBtn)
+esStroke.Color = Color3.fromRGB(255, 80, 80); esStroke.Transparency = 0.2; esStroke.Thickness = 1.8
+
+local extraStopBtn = Instance.new("TextButton", extraBtnRow)
+extraStopBtn.Position = UDim2.new(0.5, 4, 0, 0); extraStopBtn.Size = UDim2.new(0.5, -4, 1, 0)
+extraStopBtn.BackgroundColor3 = Color3.fromRGB(55, 55, 65)
+extraStopBtn.BackgroundTransparency = 0.05; extraStopBtn.BorderSizePixel = 0
+extraStopBtn.AutoButtonColor = false
+extraStopBtn.Font = Enum.Font.GothamBold; extraStopBtn.Text = "⏹ إيقاف"
+extraStopBtn.TextSize = 15; extraStopBtn.TextColor3 = Color3.fromRGB(210, 210, 225)
+Instance.new("UICorner", extraStopBtn).CornerRadius = UDim.new(0, 10)
+extraStopBtn.MouseEnter:Connect(function() TweenService:Create(extraStopBtn, TweenInfo.new(0.12), {BackgroundColor3 = Color3.fromRGB(80, 80, 95)}):Play() end)
+extraStopBtn.MouseLeave:Connect(function() TweenService:Create(extraStopBtn, TweenInfo.new(0.12), {BackgroundColor3 = Color3.fromRGB(55, 55, 65)}):Play() end)
+
+local extraStatus = Instance.new("TextLabel", extraPage)
+extraStatus.BackgroundTransparency = 1
+extraStatus.Position = UDim2.new(0, 10, 0, 210); extraStatus.Size = UDim2.new(1, -20, 0, 22)
+extraStatus.Font = Enum.Font.GothamSemibold; extraStatus.TextSize = 12
+extraStatus.TextColor3 = Color3.fromRGB(150, 220, 170); extraStatus.Text = ""
+extraStatus.TextXAlignment = Enum.TextXAlignment.Left
+
+local extraSpamRunning = false
+local extraSpamThread = nil
+
+local function buildExtraMessage()
+ local txt = extraInputBox.Text
+ if txt == "" or txt:match("^%s*$") then return nil end
+ local n = tonumber(repeatBox.Text) or 20
+ n = math.clamp(math.floor(n), 1, 100)
+ repeatBox.Text = tostring(n)
+ local parts = {}
+ for i = 1, n do parts[i] = txt end
+ return table.concat(parts, " ")
+end
+
+extraStartBtn.MouseButton1Click:Connect(function()
+ if extraSpamRunning then return end
+ local msg = buildExtraMessage()
+ if not msg then
+  extraStatus.Text = "⚠️ اكتب كلمة أو أمر أولاً"
+  extraStatus.TextColor3 = Color3.fromRGB(255, 180, 80)
+  return
+ end
+ extraSpamRunning = true
+ TweenService:Create(extraStartBtn, TweenInfo.new(0.15), {BackgroundColor3 = Color3.fromRGB(0, 190, 75)}):Play()
+ esStroke.Color = Color3.fromRGB(0, 255, 130)
+ extraStartBtn.Text = "شغال ✓"
+ extraStatus.Text = "⚡ يرسل عبر: " .. (capturedChatRemote and capturedChatRemote.Name or "ChatEvent الافتراضي")
+ extraStatus.TextColor3 = Color3.fromRGB(0, 255, 130)
+ extraSpamThread = task.spawn(function()
+  while extraSpamRunning do
+   sendOnce(msg)
+   task.wait(0.1)
+  end
+ end)
+end)
+
+extraStopBtn.MouseButton1Click:Connect(function()
+ if extraSpamRunning then
+  extraSpamRunning = false
+  extraSpamThread = nil
+  TweenService:Create(extraStartBtn, TweenInfo.new(0.15), {BackgroundColor3 = Color3.fromRGB(180, 25, 25)}):Play()
+  esStroke.Color = Color3.fromRGB(255, 80, 80)
+  extraStartBtn.Text = "▶ تشغيل سبام"
+  extraStatus.Text = "⏹ تم إيقاف السبام"
+  extraStatus.TextColor3 = Color3.fromRGB(255, 180, 80)
+ end
+end)
 
 -- Default tab
 
